@@ -8,6 +8,7 @@ from torch.optim import AdamW
 from sklearn.metrics import classification_report, accuracy_score
 from sklearn.preprocessing import LabelEncoder
 import numpy as np
+import matplotlib.pyplot as plt
 
 LABELS = ['Anxiety', 'Depression', 'Normal', 'Suicidal']
 MAX_LEN = 256
@@ -17,6 +18,7 @@ LR = 2e-5
 MODEL_NAME = "bert-base-uncased"
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'datasets', 'no_handcrafted')
 SAVE_PATH = os.path.join(os.path.dirname(__file__), 'mental_health_bert.pt')
+GRAPHS_DIR = os.path.join(os.path.dirname(__file__), 'graphs')
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -68,7 +70,7 @@ def load_data():
 def train(model, loader, optimizer, scheduler):
     model.train()
     total_loss = 0
-    for batch in tqdm(loader, desc=f"Training", leave=False):
+    for batch in tqdm(loader, desc="Training", leave=False):
         optimizer.zero_grad()
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
@@ -100,8 +102,48 @@ def evaluate(model, loader, le):
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
-    print(f"Accuracy: {accuracy_score(all_labels, all_preds):.4f}")
+    acc = accuracy_score(all_labels, all_preds)
+    report = classification_report(all_labels, all_preds, target_names=le.classes_, output_dict=True)
+    print(f"Accuracy: {acc:.4f}")
     print(classification_report(all_labels, all_preds, target_names=le.classes_))
+    return acc, report
+
+
+def plot_training_loss(losses):
+    os.makedirs(GRAPHS_DIR, exist_ok=True)
+    plt.figure()
+    plt.plot(range(1, len(losses) + 1), losses, marker='o')
+    plt.title("Training Loss per Epoch")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.xticks(range(1, len(losses) + 1))
+    plt.tight_layout()
+    plt.savefig(os.path.join(GRAPHS_DIR, 'training_loss.png'))
+    plt.close()
+    print("Saved bert_model/graphs/training_loss.png")
+
+
+def plot_eval_scores(report, acc):
+    os.makedirs(GRAPHS_DIR, exist_ok=True)
+    metrics = ['precision', 'recall', 'f1-score']
+    x = np.arange(len(LABELS))
+    width = 0.25
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for i, metric in enumerate(metrics):
+        scores = [report[cls][metric] for cls in LABELS]
+        ax.bar(x + i * width, scores, width, label=metric.capitalize())
+
+    ax.set_title(f"Per-Class Evaluation Scores (Accuracy: {acc:.4f})")
+    ax.set_xticks(x + width)
+    ax.set_xticklabels(LABELS)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Score")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(GRAPHS_DIR, 'eval_scores.png'))
+    plt.close()
+    print("Saved bert_model/graphs/eval_scores.png")
 
 
 def main():
@@ -125,12 +167,17 @@ def main():
         num_training_steps=total_steps
     )
 
+    losses = []
     for epoch in range(1, EPOCHS + 1):
         avg_loss = train(model, train_loader, optimizer, scheduler)
+        losses.append(avg_loss)
         print(f"Epoch {epoch}/{EPOCHS} — Loss: {avg_loss:.4f}")
 
     print("\n--- Test Set Evaluation ---")
-    evaluate(model, test_loader, le)
+    acc, report = evaluate(model, test_loader, le)
+
+    plot_training_loss(losses)
+    plot_eval_scores(report, acc)
 
     torch.save({
         'model_state_dict': model.state_dict(),
